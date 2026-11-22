@@ -1,1 +1,19 @@
-.idea
+# Gradle / Kotlin
+.gradle/
+**/build/
+.kotlin/
+
+# Node / Vite
+**/node_modules/
+**/dist/
+
+# IDE / OS
+.idea/
+.vscode/
+*.iml
+.DS_Store
+
+# Local settings
+.env
+.env.*
+!.env.example
