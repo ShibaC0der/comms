@@ -5,9 +5,13 @@ import io.ktor.websocket.WebSocketSession
 import io.ktor.websocket.readText
 import io.ktor.websocket.send
 import java.util.UUID
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -19,7 +23,7 @@ import org.slf4j.Logger
 internal const val MAX_SIGNAL_BYTES = 64 * 1024
 
 internal class SignalingRoom(private val log: Logger) {
-    private val lock = Any()
+    private val lock = Mutex()
     private val peers = mutableMapOf<String, Peer>()
 
     suspend fun serve(session: WebSocketSession) {
@@ -32,7 +36,7 @@ internal class SignalingRoom(private val log: Logger) {
         }
 
         try {
-            synchronized(lock) {
+            lock.withLock {
                 // Queue welcome before exposing this peer as a signal recipient.
                 peer.enqueue(buildJsonObject {
                     put("type", "welcome")
@@ -51,17 +55,20 @@ internal class SignalingRoom(private val log: Logger) {
                 }
             }
         } finally {
-            synchronized(lock) {
-                peers.remove(id)
-                notifyPeers("peer-left", id)
+            withContext(NonCancellable) {
+                val removed = lock.withLock {
+                    if (peers.remove(id) == null) return@withLock false
+                    notifyPeers("peer-left", id)
+                    true
+                }
+                if (removed) log.info("Signaling peer left: {}", id)
             }
             peer.messages.cancel()
             writer.cancel()
-            log.info("Signaling peer left: {}", id)
         }
     }
 
-    private fun routeSignal(from: String, text: String) {
+    private suspend fun routeSignal(from: String, text: String) {
         val message = try {
             Json.parseToJsonElement(text) as? JsonObject ?: return
         } catch (_: IllegalArgumentException) {
@@ -87,7 +94,7 @@ internal class SignalingRoom(private val log: Logger) {
             put("from", from)
             put("data", data)
         }.toString()
-        synchronized(lock) {
+        lock.withLock {
             peers[to]?.enqueue(forwarded)
         }
     }
