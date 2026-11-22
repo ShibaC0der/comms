@@ -1,54 +1,61 @@
 # Comms
 
-Минимальный браузерный голосовой чат. Разрабатываем по этапам, чтобы как можно раньше проверить качество WebRTC-аудио.
+Браузерный голосовой чат для друзей. Аудио передаётся через WebRTC; сервер на Kotlin отвечает за сигналинг и управление комнатами.
 
-## Структура
+## Структура проекта
 
-- `backend/` — Kotlin + Ktor, пока только `GET /health`.
-- `frontend/` — React + TypeScript + Vite, пока стартовая страница.
-- `docs/superpowers/` — согласованные спецификация и план.
+- `backend/` — Kotlin + Ktor.
+- `frontend/` — React + TypeScript + Vite.
+- `docs/superpowers/specs/` — дизайн-спецификации.
+- `docs/superpowers/plans/` — планы реализации.
 
-## Требования
+## Требования для разработки
 
-- JDK **25**.
-- Node.js **22.12+** и npm.
-- Gradle Wrapper **9.7.1** (см. замечание ниже).
+- JDK 25.
+- Gradle 9.7.1.
+- Node.js 22.12+ и npm.
 
 ## Локальный запуск
 
-Терминал 1, backend:
+### Backend
+
+Из каталога `backend/`:
 
 ```bash
-cd backend
-./gradlew test
-./gradlew run
+gradle test
+gradle run
 ```
 
-Проверка API: `curl http://127.0.0.1:8080/health` — должен вернуть `OK`.
-
-Терминал 2, frontend:
+Проверка сервера:
 
 ```bash
-cd frontend
+curl http://127.0.0.1:8080/health
+```
+
+Ожидаемый ответ: `OK`.
+
+Пока Gradle Wrapper не добавлен в репозиторий, для запуска нужен локально установленный Gradle.
+
+### Frontend
+
+Из каталога `frontend/`:
+
+```bash
 npm install
 npm run dev
 ```
 
-Открыть `http://localhost:5173`. Проверить сборку: `npm run build`.
+Открой `http://localhost:5173`.
 
-Для будущего `/ws` настроен dev proxy Vite → `ws://127.0.0.1:8080` с поддержкой WebSocket upgrade. Сам маршрут появится в шаге 2.
-
-## Статус шага 1
-
-Исходники и конфигурации созданы. **Сборки в рабочем окружении генерации не проверены**: там JDK 21 вместо JDK 25, Gradle не установлен и отсутствует доступ к npm/Maven/Gradle registry.
-
-**Важное ограничение:** `backend/gradle/wrapper/gradle-wrapper.jar` не удалось получить из-за отсутствия сетевого доступа; стандартные скрипты `gradlew` и `gradlew.bat` также пока не сгенерированы. Для завершения первого шага нужно один раз установить Gradle локально и запустить из `backend/`:
+Проверка сборки:
 
 ```bash
-gradle wrapper --gradle-version 9.7.1
-./gradlew test
+npm run build
 ```
 
-После этого следует закоммитить `gradlew`, `gradlew.bat` и `gradle/wrapper/gradle-wrapper.jar`; файл `gradle-wrapper.properties` уже подготовлен. В `frontend/` после `npm install` следует закоммитить `package-lock.json`, чтобы зафиксировать граф зависимостей.
+Для будущего WebSocket-сигналинга в Vite настроен прокси `/ws` на backend.
 
-До успешной сборки и проверки `/health` **не переходим к шагу 2**.
+## Документация
+
+- [Дизайн этапа 1](docs/superpowers/specs/2026-11-22-stage-1-voice-design.md)
+- [План этапа 1](docs/superpowers/plans/2026-11-22-stage-1-voice-plan.md)
