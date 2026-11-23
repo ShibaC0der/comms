@@ -2,6 +2,15 @@ export type VoiceState =
   | { status: 'idle' | 'connecting' | 'connected' }
   | { status: 'error'; message: string }
 
+export type VoiceDiagnostics = {
+  socket: 'closed' | 'connecting' | 'open'
+  peers: {
+    id: string
+    connection: RTCPeerConnectionState
+    ice: RTCIceConnectionState
+  }[]
+}
+
 const WELCOME_TIMEOUT_MS = 10_000
 
 type Signal =
@@ -14,6 +23,7 @@ type ServerMessage =
   | { type: 'signal'; from: string; data: Signal }
 
 type Peer = {
+  events: AbortController
   pc: RTCPeerConnection
   candidates: RTCIceCandidateInit[]
   pending: Promise<void>
@@ -22,6 +32,7 @@ type Peer = {
 type Connection = {
   events: AbortController
   peers: Map<string, Peer>
+  socketState: VoiceDiagnostics['socket']
   stream?: MediaStream
   socket?: WebSocket
   welcomeTimeout?: ReturnType<typeof setTimeout>
@@ -33,12 +44,13 @@ export class VoiceClient {
   constructor(
     private readonly onStateChange: (state: VoiceState) => void,
     private readonly onRemoteAudio: (id: string, stream: MediaStream | null) => void,
+    private readonly onDiagnostics: (diagnostics: VoiceDiagnostics) => void,
   ) {}
 
   async connect() {
     if (this.connection) return
 
-    const connection: Connection = { events: new AbortController(), peers: new Map() }
+    const connection: Connection = { events: new AbortController(), peers: new Map(), socketState: 'closed' }
     this.connection = connection
     this.onStateChange({ status: 'connecting' })
 
@@ -85,6 +97,12 @@ export class VoiceClient {
       return
     }
 
+    connection.socketState = 'connecting'
+    this.reportSocket(connection)
+    connection.socket.addEventListener('open', () => {
+      connection.socketState = 'open'
+      this.reportSocket(connection)
+    }, options)
     connection.welcomeTimeout = setTimeout(() => {
       this.fail('Сервер не подтвердил подключение. Попробуйте ещё раз.')
     }, WELCOME_TIMEOUT_MS)
@@ -110,6 +128,7 @@ export class VoiceClient {
       if (!Array.isArray(message.peers)) return
       clearTimeout(connection.welcomeTimeout)
       connection.welcomeTimeout = undefined
+      console.debug('[Comms] welcome', { peers: message.peers.length })
       this.onStateChange({ status: 'connected' })
       for (const id of message.peers) {
         const peer = this.addPeer(connection, stream, id)
@@ -135,10 +154,16 @@ export class VoiceClient {
     if (existing) return existing
 
     const pc = new RTCPeerConnection()
-    const peer: Peer = { pc, candidates: [], pending: Promise.resolve() }
+    const peer: Peer = { events: new AbortController(), pc, candidates: [], pending: Promise.resolve() }
     connection.peers.set(id, peer)
 
-    const options = { signal: connection.events.signal }
+    const options = { signal: peer.events.signal }
+    const reportState = () => {
+      console.debug('[Comms] peer state', id, pc.connectionState, pc.iceConnectionState)
+      this.reportDiagnostics()
+    }
+    pc.addEventListener('connectionstatechange', reportState, options)
+    pc.addEventListener('iceconnectionstatechange', reportState, options)
     pc.addEventListener('icecandidate', ({ candidate }) => {
       if (candidate) this.sendSignal(connection, id, peer, { type: 'candidate', candidate: candidate.toJSON() })
     }, options)
@@ -150,6 +175,7 @@ export class VoiceClient {
 
     const [track] = stream.getAudioTracks()
     pc.addTrack(track, stream)
+    reportState()
     return peer
   }
 
@@ -160,7 +186,7 @@ export class VoiceClient {
     }).catch(() => {
       if (connection.peers.get(id) !== peer) return
       this.removePeer(connection, id)
-      console.warn('Не удалось установить аудиосвязь с участником.')
+      console.warn('[Comms] negotiation failed', id)
     })
   }
 
@@ -201,7 +227,10 @@ export class VoiceClient {
     if (!peer) return
 
     connection.peers.delete(id)
+    peer.events.abort()
     peer.pc.close()
+    console.debug('[Comms] peer closed', id)
+    if (this.connection === connection) this.reportDiagnostics()
     this.onRemoteAudio(id, null)
   }
 
@@ -220,6 +249,24 @@ export class VoiceClient {
     for (const id of connection.peers.keys()) this.removePeer(connection, id)
     connection.stream?.getTracks().forEach(track => track.stop())
     connection.socket?.close()
+    connection.socketState = 'closed'
+    this.reportSocket(connection)
+  }
+
+  private reportSocket(connection: Connection) {
+    console.debug('[Comms] WebSocket', connection.socketState)
+    this.reportDiagnostics()
+  }
+
+  private reportDiagnostics() {
+    this.onDiagnostics({
+      socket: this.connection?.socketState ?? 'closed',
+      peers: Array.from(this.connection?.peers ?? [], ([id, { pc }]) => ({
+        id,
+        connection: pc.connectionState,
+        ice: pc.iceConnectionState,
+      })),
+    })
   }
 
   private fail(message: string) {
