@@ -36,22 +36,17 @@ internal class SignalingRoom(private val log: Logger) {
         }
 
         try {
-            lock.withLock {
-                // Queue welcome before exposing this peer as a signal recipient.
-                peer.enqueue(buildJsonObject {
-                    put("type", "welcome")
-                    put("selfId", id)
-                    putJsonArray("peers") {
-                        peers.keys.forEach { add(JsonPrimitive(it)) }
-                    }
-                }.toString())
-                notifyPeers("peer-joined", id)
-                peers[id] = peer
-            }
-            log.info("Signaling peer joined: {}", id)
             for (frame in session.incoming) {
-                if (frame is Frame.Text && frame.data.size <= MAX_SIGNAL_BYTES) {
-                    routeSignal(id, frame.readText())
+                if (frame !is Frame.Text || frame.data.size > MAX_SIGNAL_BYTES) continue
+                val message = try {
+                    Json.parseToJsonElement(frame.readText()) as? JsonObject ?: continue
+                } catch (_: IllegalArgumentException) {
+                    continue
+                }
+                when (message["type"]) {
+                    JsonPrimitive("join"), JsonPrimitive("rename") -> updateName(id, peer, message)
+                    JsonPrimitive("signal") -> if (peer.displayName != null) routeSignal(id, message)
+                    else -> continue
                 }
             }
         } finally {
@@ -68,13 +63,40 @@ internal class SignalingRoom(private val log: Logger) {
         }
     }
 
-    private suspend fun routeSignal(from: String, text: String) {
-        val message = try {
-            Json.parseToJsonElement(text) as? JsonObject ?: return
-        } catch (_: IllegalArgumentException) {
-            return
+    private suspend fun updateName(id: String, peer: Peer, message: JsonObject) {
+        val joining = message["type"] == JsonPrimitive("join")
+        val name = (message["displayName"] as? JsonPrimitive)?.takeIf { it.isString }?.content?.trim()
+        lock.withLock {
+            if (name.isNullOrEmpty() || joining != (peer.displayName == null)) {
+                peer.enqueue(buildJsonObject {
+                    put("type", "error")
+                    put("message", if (name.isNullOrEmpty()) "Введите имя участника." else "Запрос недоступен.")
+                }.toString())
+                return
+            }
+            peer.displayName = name
+            if (joining) {
+                peer.enqueue(buildJsonObject {
+                    put("type", "welcome")
+                    put("selfId", id)
+                    put("displayName", name)
+                    putJsonArray("peers") {
+                        for ((peerId, member) in peers) add(buildJsonObject {
+                            put("peerId", peerId)
+                            put("displayName", member.displayName)
+                        })
+                    }
+                }.toString())
+                notifyPeers("peer-joined", id, name)
+                peers[id] = peer
+                log.info("Signaling peer joined: {}", id)
+            } else {
+                notifyPeers("peer-renamed", id, name)
+            }
         }
-        if (message["type"] != JsonPrimitive("signal")) return
+    }
+
+    private suspend fun routeSignal(from: String, message: JsonObject) {
         val to = (message["to"] as? JsonPrimitive)?.takeIf { it.isString }?.content ?: return
         if (to == from) return
         val data = message["data"] as? JsonObject ?: return
@@ -99,15 +121,17 @@ internal class SignalingRoom(private val log: Logger) {
         }
     }
 
-    private fun notifyPeers(type: String, id: String) {
+    private fun notifyPeers(type: String, id: String, displayName: String? = null) {
         val message = buildJsonObject {
             put("type", type)
             put("peerId", id)
+            if (displayName != null) put("displayName", displayName)
         }.toString()
         peers.values.forEach { it.enqueue(message) }
     }
 
     private class Peer(private val session: WebSocketSession) {
+        var displayName: String? = null
         val messages = Channel<String>(capacity = 64)
 
         fun enqueue(message: String) {

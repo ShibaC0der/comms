@@ -1,3 +1,5 @@
+type Participant = { peerId: string; displayName: string }
+
 export type VoiceState =
   | { status: 'idle' | 'connecting' | 'connected' }
   | { status: 'error'; message: string }
@@ -18,8 +20,10 @@ type Signal =
   | { type: 'candidate'; candidate: RTCIceCandidateInit }
 
 type ServerMessage =
-  | { type: 'welcome'; peers: string[] }
-  | { type: 'peer-joined' | 'peer-left'; peerId: string }
+  | { type: 'welcome'; selfId: string; displayName: string; peers: Participant[] }
+  | ({ type: 'peer-joined' | 'peer-renamed' } & Participant)
+  | { type: 'error'; message: string }
+  | { type: 'peer-left'; peerId: string }
   | { type: 'signal'; from: string; data: Signal }
 
 type Peer = {
@@ -31,6 +35,8 @@ type Peer = {
 
 type Connection = {
   events: AbortController
+  selfId?: string
+  members: Map<string, string>
   peers: Map<string, Peer>
   socketState: VoiceDiagnostics['socket']
   stream?: MediaStream
@@ -44,13 +50,16 @@ export class VoiceClient {
   constructor(
     private readonly onStateChange: (state: VoiceState) => void,
     private readonly onRemoteAudio: (id: string, stream: MediaStream | null) => void,
+    private readonly onMembers: (selfId: string, members: Map<string, string>) => void,
+    private readonly onConfirmedName: (name: string) => void,
+    private readonly onNameError: (message: string) => void,
     private readonly onDiagnostics: (diagnostics: VoiceDiagnostics) => void,
   ) {}
 
-  async connect() {
+  async connect(displayName: string) {
     if (this.connection) return
 
-    const connection: Connection = { events: new AbortController(), peers: new Map(), socketState: 'closed' }
+    const connection: Connection = { events: new AbortController(), members: new Map(), peers: new Map(), socketState: 'closed' }
     this.connection = connection
     this.onStateChange({ status: 'connecting' })
 
@@ -100,6 +109,7 @@ export class VoiceClient {
     connection.socketState = 'connecting'
     this.reportSocket(connection)
     connection.socket.addEventListener('open', () => {
+      connection.socket!.send(JSON.stringify({ type: 'join', displayName }))
       connection.socketState = 'open'
       this.reportSocket(connection)
     }, options)
@@ -130,16 +140,31 @@ export class VoiceClient {
       connection.welcomeTimeout = undefined
       console.debug('[Comms] welcome', { peers: message.peers.length })
       this.onStateChange({ status: 'connected' })
-      for (const id of message.peers) {
+      connection.selfId = message.selfId
+      connection.members.set(message.selfId, message.displayName)
+      for (const { peerId, displayName } of message.peers) connection.members.set(peerId, displayName)
+      this.onMembers(message.selfId, new Map(connection.members))
+      this.onConfirmedName(message.displayName)
+      for (const { peerId: id } of message.peers) {
         const peer = this.addPeer(connection, stream, id)
         this.queueNegotiation(connection, id, peer, async () => {
           await peer.pc.setLocalDescription(await peer.pc.createOffer())
           this.sendDescription(connection, id, peer)
         })
       }
-    } else if (message.type === 'peer-joined') {
-      this.addPeer(connection, stream, message.peerId)
+    } else if (message.type === 'error') {
+      if (connection.selfId) this.onNameError(message.message)
+      else this.fail(message.message)
+    } else if (!connection.selfId) {
+      return
+    } else if (message.type === 'peer-joined' || message.type === 'peer-renamed') {
+      connection.members.set(message.peerId, message.displayName)
+      this.onMembers(connection.selfId, new Map(connection.members))
+      if (message.type === 'peer-joined') this.addPeer(connection, stream, message.peerId)
+      else if (message.peerId === connection.selfId) this.onConfirmedName(message.displayName)
     } else if (message.type === 'peer-left') {
+      connection.members.delete(message.peerId)
+      this.onMembers(connection.selfId, new Map(connection.members))
       this.removePeer(connection, message.peerId)
     } else if (message.type === 'signal') {
       const peer = connection.peers.get(message.from)
@@ -232,6 +257,15 @@ export class VoiceClient {
     console.debug('[Comms] peer closed', id)
     if (this.connection === connection) this.reportDiagnostics()
     this.onRemoteAudio(id, null)
+  }
+
+  rename(displayName: string) {
+    const socket = this.connection?.socket
+    if (socket?.readyState === WebSocket.OPEN) {
+      socket.send(JSON.stringify({ type: 'rename', displayName }))
+    } else {
+      this.fail('Соединение с сервером закрыто.')
+    }
   }
 
   disconnect() {
