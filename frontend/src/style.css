@@ -23,3 +23,17 @@ h1 {
 .muted {
   color: #94a3b8;
 }
+
+.app form, .app li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  margin-block: 0.5rem;
+  overflow-wrap: anywhere;
+}
+
+.app input {
+  max-width: 100%;
+  box-sizing: border-box;
+}
