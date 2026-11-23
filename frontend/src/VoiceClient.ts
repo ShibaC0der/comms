@@ -2,10 +2,13 @@ export type VoiceState =
   | { status: 'idle' | 'connecting' | 'connected' }
   | { status: 'error'; message: string }
 
+const WELCOME_TIMEOUT_MS = 10_000
+
 type Connection = {
   events: AbortController
   stream?: MediaStream
   socket?: WebSocket
+  welcomeTimeout?: ReturnType<typeof setTimeout>
 }
 
 export class VoiceClient {
@@ -44,6 +47,16 @@ export class VoiceClient {
     }
     connection.stream = stream
 
+    const options = { signal: connection.events.signal }
+    const microphoneEnded = () => this.fail('Микрофон отключился. Проверьте устройство и подключитесь снова.')
+    for (const track of stream.getAudioTracks()) {
+      if (track.readyState === 'ended') {
+        microphoneEnded()
+        return
+      }
+      track.addEventListener('ended', microphoneEnded, options)
+    }
+
     const url = new URL('/ws', location.href)
     url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:'
     try {
@@ -53,10 +66,14 @@ export class VoiceClient {
       return
     }
 
-    const options = { signal: connection.events.signal }
+    connection.welcomeTimeout = setTimeout(() => {
+      this.fail('Сервер не подтвердил подключение. Попробуйте ещё раз.')
+    }, WELCOME_TIMEOUT_MS)
     connection.socket.addEventListener('message', event => {
       try {
         if (JSON.parse(event.data)?.type === 'welcome') {
+          clearTimeout(connection.welcomeTimeout)
+          connection.welcomeTimeout = undefined
           this.onStateChange({ status: 'connected' })
         }
       } catch (error) {
@@ -82,6 +99,7 @@ export class VoiceClient {
 
     this.connection = undefined
     connection.events.abort()
+    clearTimeout(connection.welcomeTimeout)
     connection.stream?.getTracks().forEach(track => track.stop())
     connection.socket?.close()
   }
