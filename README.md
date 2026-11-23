@@ -61,6 +61,15 @@ npm run build
 
 Vite проксирует WebSocket-маршрут сигналинга `/ws` на backend.
 
+## CI
+
+При каждом push GitHub Actions запускает две проверки:
+
+- `./gradlew test` в `backend/` с JDK 25.
+- `npm install` и `npm run build` в `frontend/` с Node.js 22.
+
+Результаты доступны во вкладке **Actions**, в workflow **CI**.
+
 ## Ручная проверка голоса
 
 1. Запусти Ktor и Vite из чистого checkout. Проверь ответ `200 OK` от `/health` и заголовок Comms на `http://localhost:5173`.
