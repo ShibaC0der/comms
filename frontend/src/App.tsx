@@ -8,12 +8,55 @@ const statusLabel: Record<VoiceState['status'], string> = {
   error: 'Ошибка подключения',
 }
 
+function RemoteAudio({ stream }: { stream: MediaStream }) {
+  const audioRef = useRef<HTMLAudioElement>(null)
+  const [playbackBlocked, setPlaybackBlocked] = useState(false)
+
+  useEffect(() => {
+    const audio = audioRef.current
+    if (!audio) return
+
+    let active = true
+    audio.srcObject = stream
+    void audio.play().catch(() => {
+      if (active) setPlaybackBlocked(true)
+    })
+    return () => {
+      active = false
+      audio.pause()
+      audio.srcObject = null
+    }
+  }, [stream])
+
+  return (
+    <div>
+      <audio ref={audioRef} onPlaying={() => setPlaybackBlocked(false)} />
+      {playbackBlocked && (
+        <button type="button" onClick={() => {
+          void audioRef.current?.play().catch(() => setPlaybackBlocked(true))
+        }}>
+          Включить звук
+        </button>
+      )}
+    </div>
+  )
+}
+
 export default function App() {
   const [state, setState] = useState<VoiceState>({ status: 'idle' })
+  const [remoteAudio, setRemoteAudio] = useState(() => new Map<string, MediaStream>())
   const clientRef = useRef<VoiceClient | null>(null)
 
   useEffect(() => {
-    const client = new VoiceClient(setState)
+    const client = new VoiceClient(setState, (id, stream) => {
+      if (clientRef.current !== client) return
+      setRemoteAudio(previous => {
+        const next = new Map(previous)
+        if (stream) next.set(id, stream)
+        else next.delete(id)
+        return next
+      })
+    })
     clientRef.current = client
     return () => {
       clientRef.current = null
@@ -38,6 +81,7 @@ export default function App() {
       >
         {active ? 'Отключиться' : 'Подключиться'}
       </button>
+      {[...remoteAudio].map(([id, stream]) => <RemoteAudio key={id} stream={stream} />)}
     </main>
   )
 }
