@@ -53,7 +53,7 @@ npm run dev
 npm run build
 ```
 
-Для будущего WebSocket-сигналинга в Vite настроен прокси `/ws` на backend.
+Vite проксирует WebSocket-маршрут сигналинга `/ws` на backend.
 
 ## Документация
 
