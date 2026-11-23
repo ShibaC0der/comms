@@ -9,8 +9,6 @@ Comms is a browser voice chat project. The Ktor server manages one in-memory sig
 - `frontend/src/main.tsx` mounts the React application. Edit the root component in `frontend/src/App.tsx` to change the page.
 - `frontend/vite.config.ts` proxies `/ws` to the backend at `127.0.0.1:8080`.
 
-Consult the [Stage 1 specification](docs/superpowers/specs/2026-11-22-stage-1-voice-design.md) for the signaling protocol and voice acceptance criteria. The [implementation plan](docs/superpowers/plans/2026-11-22-stage-1-voice-plan.md) describes the planned work.
-
 ## Development and checks
 
 | Working directory | Requirements | Commands |
