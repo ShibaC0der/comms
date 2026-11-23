@@ -12,18 +12,24 @@
 ## Требования для разработки
 
 - JDK 25.
-- Gradle 9.7.1.
 - Node.js 22.12+ и npm.
 
 ## Локальный запуск
 
 ### Backend
 
-Из каталога `backend/`:
+Из каталога `backend/` на Linux и macOS:
 
 ```bash
-gradle test
-gradle run
+./gradlew test
+./gradlew run
+```
+
+В PowerShell на Windows:
+
+```powershell
+.\gradlew.bat test
+.\gradlew.bat run
 ```
 
 Проверка сервера:
@@ -34,7 +40,7 @@ curl http://127.0.0.1:8080/health
 
 Ожидаемый ответ: `OK`.
 
-Пока Gradle Wrapper не добавлен в репозиторий, для запуска нужен локально установленный Gradle.
+При первом запуске Wrapper скачивает Gradle 9.7.1.
 
 ### Frontend
 
