@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { VoiceClient, type VoiceState } from './VoiceClient'
+import { VoiceClient, type VoiceDiagnostics, type VoiceState } from './VoiceClient'
 
 const statusLabel: Record<VoiceState['status'], string> = {
   idle: 'Не подключено',
@@ -8,18 +8,29 @@ const statusLabel: Record<VoiceState['status'], string> = {
   error: 'Ошибка подключения',
 }
 
+function playbackError(error: unknown) {
+  if (error instanceof DOMException && error.name === 'NotAllowedError') {
+    return 'Браузер заблокировал автоматическое воспроизведение.'
+  }
+  if (error instanceof DOMException && error.name === 'NotSupportedError') {
+    return 'Браузер не поддерживает этот аудиопоток.'
+  }
+  return 'Не удалось воспроизвести аудиопоток.'
+}
+
 function RemoteAudio({ stream }: { stream: MediaStream }) {
   const audioRef = useRef<HTMLAudioElement>(null)
-  const [playbackBlocked, setPlaybackBlocked] = useState(false)
+  const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
     const audio = audioRef.current
     if (!audio) return
 
     let active = true
+    setError(null)
     audio.srcObject = stream
-    void audio.play().catch(() => {
-      if (active) setPlaybackBlocked(true)
+    void audio.play().catch(error => {
+      if (active) setError(playbackError(error))
     })
     return () => {
       active = false
@@ -30,13 +41,16 @@ function RemoteAudio({ stream }: { stream: MediaStream }) {
 
   return (
     <div>
-      <audio ref={audioRef} onPlaying={() => setPlaybackBlocked(false)} />
-      {playbackBlocked && (
-        <button type="button" onClick={() => {
-          void audioRef.current?.play().catch(() => setPlaybackBlocked(true))
-        }}>
-          Включить звук
-        </button>
+      <audio ref={audioRef} onPlaying={() => setError(null)} />
+      {error && (
+        <>
+          <p role="alert">{error}</p>
+          <button type="button" onClick={() => {
+            void audioRef.current?.play().catch(error => setError(playbackError(error)))
+          }}>
+            Включить звук
+          </button>
+        </>
       )}
     </div>
   )
@@ -44,6 +58,7 @@ function RemoteAudio({ stream }: { stream: MediaStream }) {
 
 export default function App() {
   const [state, setState] = useState<VoiceState>({ status: 'idle' })
+  const [diagnostics, setDiagnostics] = useState<VoiceDiagnostics>({ socket: 'closed', peers: [] })
   const [remoteAudio, setRemoteAudio] = useState(() => new Map<string, MediaStream>())
   const clientRef = useRef<VoiceClient | null>(null)
 
@@ -56,6 +71,8 @@ export default function App() {
         else next.delete(id)
         return next
       })
+    }, diagnostics => {
+      if (clientRef.current === client) setDiagnostics(diagnostics)
     })
     clientRef.current = client
     return () => {
@@ -81,7 +98,25 @@ export default function App() {
       >
         {active ? 'Отключиться' : 'Подключиться'}
       </button>
-      {[...remoteAudio].map(([id, stream]) => <RemoteAudio key={id} stream={stream} />)}
+      <section aria-label="Диагностика">
+        <p>WebSocket: {diagnostics.socket}</p>
+        <p>Собеседников: {diagnostics.peers.length}</p>
+        {diagnostics.peers.length > 0 && (
+          <ul>
+            {diagnostics.peers.map(({ id, connection, ice }) => {
+              const stream = remoteAudio.get(id)
+              return (
+                <li key={id}>
+                  <div>{id}</div>
+                  <div>connectionState: {connection}</div>
+                  <div>iceConnectionState: {ice}</div>
+                  {stream && <RemoteAudio stream={stream} />}
+                </li>
+              )
+            })}
+          </ul>
+        )}
+      </section>
     </main>
   )
 }
